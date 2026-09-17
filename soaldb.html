@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aplikasi CBT Terintegrasi Firebase</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Firebase SDK (Compat Version) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body>
+
+    <div class="cbt-container">
+        <!-- Header Ujian -->
+        <header>
+            <h2>Ujian Online (CBT)</h2>
+            <div id="user-info" class="hidden">
+                Peserta: <span id="display-nama"></span> (<span id="display-nis"></span>)
+            </div>
+        </header>
+
+        <!-- Form Login (Siswa & Admin) -->
+        <section id="login-section" class="card">
+            <h3>Login Peserta / Admin</h3>
+            <p>Masukkan NIS dan Password Anda untuk mulai ujian.</p>
+            <div class="form-group">
+                <label for="input-nis">NIS / Username Admin:</label>
+                <input type="text" id="input-nis" placeholder="Contoh NIS: 12345 atau 'admin'">
+            </div>
+            <div class="form-group">
+                <label for="input-pass">Password:</label>
+                <input type="password" id="input-pass" placeholder="Masukkan password Anda">
+            </div>
+            <button id="btn-mulai" class="btn-primary">Masuk / Mulai Ujian</button>
+        </section>
+
+        <!-- Area Soal Ujian (Siswa) -->
+        <section id="quiz-section" class="card hidden">
+            <div class="quiz-header">
+                <span id="question-number">Soal 1 dari N</span>
+                <span id="timer">Waktu: <span id="time-left">--:--</span></span>
+            </div>
+            
+            <div id="question-container">
+                <p id="question-text">Memuat pertanyaan dari server...</p>
+                <div id="options-container" class="options-list">
+                    <!-- Opsi jawaban di-generate via JavaScript -->
+                </div>
+            </div>
+
+            <div class="quiz-footer">
+                <button id="btn-prev" class="btn-secondary">Sebelumnya</button>
+                <button id="btn-next" class="btn-primary">Selanjutnya</button>
+                <button id="btn-submit" class="btn-success hidden">Selesaikan Ujian</button>
+            </div>
+        </section>
+
+        <!-- Area Hasil Siswa (Siswa TIDAK melihat nilai dan jawaban) -->
+        <section id="result-section" class="card hidden">
+            <h3>Ujian Selesai!</h3>
+            <div class="result-box">
+                <p>Terima kasih, <strong><span id="res-nama"></span></strong>.</p>
+                <p style="margin-top: 15px; color: #555;">Jawaban Anda telah berhasil direkam oleh sistem.</p>
+                <p>Silakan keluar dari halaman ini.</p>
+            </div>
+            <button onclick="location.reload();" class="btn-primary">Keluar</button>
+        </section>
+
+        <!-- Area Dashboard Admin (Hanya untuk Admin) -->
+        <section id="admin-section" class="card hidden">
+            <h3>Dashboard Admin - Rekap Nilai Siswa</h3>
+            <p style="margin-bottom: 15px;">Daftar siswa yang telah menyelesaikan ujian:</p>
+            <div style="overflow-x: auto;">
+                <table class="admin-table" border="1" cellspacing="0" cellpadding="8" style="width:100%; border-collapse: collapse; text-align: left;">
+                    <thead>
+                        <tr style="background-color: #f1f3f4;">
+                            <th>No</th>
+                            <th>Nama</th>
+                            <th>NIS</th>
+                            <th>Skor</th>
+                            <th>Benar/Total</th>
+                            <th>Waktu Selesai</th>
+                        </tr>
+                    </thead>
+                    <tbody id="admin-results-body">
+                        <!-- Data rekap dimuat via JS -->
+                    </tbody>
+                </table>
+            </div>
+            <button onclick="location.reload();" class="btn-secondary" style="margin-top: 20px;">Keluar / Logout Admin</button>
+        </section>
+    </div>
+
+    <!-- Script Aplikasi CBT & Firebase -->
+    <script>
+        // ==========================================
+        // 1. KONFIGURASI FIREBASE
+        // ==========================================
+ // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyBXuSxI5-I5mcznaChA2PQWfm6gH67T1Mg",
+  authDomain: "coba1-44871.firebaseapp.com",
+  databaseURL: "https://coba1-44871-default-rtdb.firebaseio.com",
+  projectId: "coba1-44871",
+  storageBucket: "coba1-44871.firebasestorage.app",
+  messagingSenderId: "757892130863",
+  appId: "1:757892130863:web:53a30193415d11104e3eda",
+  measurementId: "G-EQMX8H8L8Z"
+};
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // ==========================================
+        // 2. STATE APLIKASI
+        // ==========================================
+        let questions = [];
+        let currentQuestionIndex = 0;
+        let userAnswers = {}; 
+        let studentData = { name: "", nis: "" };
+        let timerInterval;
+
+        // Elemen DOM
+        const loginSection = document.getElementById('login-section');
+        const quizSection = document.getElementById('quiz-section');
+        const resultSection = document.getElementById('result-section');
+        const adminSection = document.getElementById('admin-section');
+        const userInfo = document.getElementById('user-info');
+        
+        const inputNis = document.getElementById('input-nis');
+        const inputPass = document.getElementById('input-pass');
+        const btnMulai = document.getElementById('btn-mulai');
+
+        const questionNumber = document.getElementById('question-number');
+        const questionText = document.getElementById('question-text');
+        const optionsContainer = document.getElementById('options-container');
+        
+        const btnPrev = document.getElementById('btn-prev');
+        const btnNext = document.getElementById('btn-next');
+        const btnSubmit = document.getElementById('btn-submit');
+
+        // ==========================================
+        // 3. EVENT LISTENERS & VALIDASI LOGIN
+        // ==========================================
+        btnMulai.addEventListener('click', async () => {
+            const nis = inputNis.value.trim();
+            const password = inputPass.value.trim();
+
+            if (!nis || !password) {
+                alert('Mohon isi NIS dan Password terlebih dahulu!');
+                return;
+            }
+
+            btnMulai.disabled = true;
+            btnMulai.innerText = "Memeriksa Akun...";
+
+            try {
+                // FITUR 1 & 3: CEK APAKAH LOGIN SEBAGAI ADMIN DI DATABASE
+                const adminSnapshot = await db.ref('admin').once('value');
+                if (adminSnapshot.exists()) {
+                    const adminData = adminSnapshot.val();
+                    // Mendukung struktur admin tunggal atau banyak (object/array)
+                    let isAdminValid = false;
+                    if (Array.isArray(adminData)) {
+                        isAdminValid = adminData.some(a => a && a.username === nis && a.password === password);
+                    } else if (typeof adminData === 'object') {
+                        isAdminValid = Object.values(adminData).some(a => a && (a.username === nis || a.nis === nis) && a.password === password);
+                    }
+
+                    if (isAdminValid) {
+                        loginSection.classList.add('hidden');
+                        adminSection.classList.remove('hidden');
+                        loadAdminDashboard();
+                        return;
+                    }
+                }
+
+                // FITUR 2: CEK DATA SISWA DI DATABASE (berdasarkan NIS & Password)
+                const studentsSnapshot = await db.ref('students').once('value');
+                let foundStudent = null;
+                let studentKey = null;
+
+                if (studentsSnapshot.exists()) {
+                    studentsSnapshot.forEach((childSnap) => {
+                        const data = childSnap.val();
+                        // Mencocokkan nis dan password dari database siswa
+                        if ((data.nis === nis || childSnap.key === nis) && data.password === password) {
+                            foundStudent = data;
+                            studentKey = childSnap.key;
+                        }
+                    });
+                }
+
+                if (!foundStudent) {
+                    alert('Login Gagal! NIS atau Password salah.');
+                    btnMulai.disabled = false;
+                    btnMulai.innerText = "Masuk / Mulai Ujian";
+                    return;
+                }
+
+                // FITUR 3: CEK APAKAH SISWA SUDAH PERNAH MENGERJAKAN (BLOKIR DOUBLE LOGIN)
+                const resultCheckSnap = await db.ref('student_results').orderByChild('nis').equalTo(nis).once('value');
+                if (resultCheckSnap.exists()) {
+                    alert('Akses ditolak! NIS ini sudah pernah digunakan untuk mengikuti ujian. Anda tidak dapat masuk untuk kedua kalinya.');
+                    btnMulai.disabled = false;
+                    btnMulai.innerText = "Masuk / Mulai Ujian";
+                    return;
+                }
+
+                studentData.name = foundStudent.nama || foundStudent.name || "Siswa";
+                studentData.nis = nis;
+
+                // Tampilkan info user di header
+                document.getElementById('display-nama').innerText = studentData.name;
+                document.getElementById('display-nis').innerText = studentData.nis;
+                userInfo.classList.remove('hidden');
+
+                // Ambil soal ujian dari Firebase
+                await fetchQuestionsFromFirebase();
+
+                if (questions.length > 0) {
+                    loginSection.classList.add('hidden');
+                    quizSection.classList.remove('hidden');
+                    loadQuestionData(currentQuestionIndex);
+                    startTimer(15 * 60); // Timer 15 menit
+                } else {
+                    alert('Gagal memuat soal dari Firebase. Pastikan data soal sudah diunggah ke node "questions".');
+                    btnMulai.disabled = false;
+                    btnMulai.innerText = "Masuk / Mulai Ujian";
+                }
+
+            } catch (error) {
+                console.error("Error saat proses login:", error);
+                alert('Terjadi kesalahan koneksi ke database.');
+                btnMulai.disabled = false;
+                btnMulai.innerText = "Masuk / Mulai Ujian";
+            }
+        });
+
+        btnNext.addEventListener('click', () => {
+            if (currentQuestionIndex < questions.length - 1) {
+                currentQuestionIndex++;
+                loadQuestionData(currentQuestionIndex);
+            }
+        });
+
+        btnPrev.addEventListener('click', () => {
+            if (currentQuestionIndex > 0) {
+                currentQuestionIndex--;
+                loadQuestionData(currentQuestionIndex);
+            }
+        });
+
+        btnSubmit.addEventListener('click', () => {
+            if (confirm('Apakah Anda yakin ingin menyelesaikan ujian?')) {
+                finishExam();
+            }
+        });
+
+        // ==========================================
+        // 4. FUNGSI LOGIKA CBT
+        // ==========================================
+        async function fetchQuestionsFromFirebase() {
+            try {
+                const snapshot = await db.ref('questions').once('value');
+                if (snapshot.exists()) {
+                    let data = snapshot.val();
+                    questions = Array.isArray(data) ? data.filter(q => q !== null) : Object.values(data);
+                } else {
+                    questions = [];
+                }
+            } catch (error) {
+                console.error("Error mengambil soal:", error);
+                questions = [];
+            }
+        }
+
+        function loadQuestionData(index) {
+            const q = questions[index];
+            questionNumber.innerText = `Soal ${index + 1} dari ${questions.length}`;
+            questionText.innerText = q.q;
+
+            optionsContainer.innerHTML = '';
+            q.o.forEach((opt, optIndex) => {
+                const isChecked = userAnswers[index] === optIndex ? 'checked' : '';
+                const optionElement = document.createElement('label');
+                optionElement.className = 'option-item';
+                optionElement.innerHTML = `
+                    <input type="radio" name="question-option" value="${optIndex}" ${isChecked} onchange="saveAnswer(${index}, ${optIndex})">
+                    <span>${String.fromCharCode(65 + optIndex)}. ${opt}</span>
+                `;
+                optionsContainer.appendChild(optionElement);
+            });
+
+            btnPrev.style.display = index === 0 ? 'none' : 'inline-block';
+            if (index === questions.length - 1) {
+                btnNext.classList.add('hidden');
+                btnSubmit.classList.remove('hidden');
+            } else {
+                btnNext.classList.remove('hidden');
+                btnSubmit.classList.add('hidden');
+            }
+        }
+
+        window.saveAnswer = function(qIndex, optIndex) {
+            userAnswers[qIndex] = optIndex;
+        }
+
+        function startTimer(duration) {
+            let timer = duration, minutes, seconds;
+            const display = document.getElementById('time-left');
+            
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                minutes = parseInt(timer / 60, 10);
+                seconds = parseInt(timer % 60, 10);
+
+                minutes = minutes < 10 ? "0" + minutes : minutes;
+                seconds = seconds < 10 ? "0" + seconds : seconds;
+
+                display.innerText = `${minutes}:${seconds}`;
+
+                if (--timer < 0) {
+                    clearInterval(timerInterval);
+                    alert('Waktu ujian telah habis!');
+                    finishExam();
+                }
+            }, 1000);
+        }
+
+        function finishExam() {
+            clearInterval(timerInterval);
+            
+            let correctCount = 0;
+            const totalQuestions = questions.length;
+
+            questions.forEach((q, index) => {
+                if (userAnswers[index] !== undefined && userAnswers[index] === q.a) {
+                    correctCount++;
+                }
+            });
+
+            const score = Math.round((correctCount / totalQuestions) * 100);
+
+            // FITUR 2: SISWA TIDAK MELIHAT NILAI / JAWABAN (Hanya info selesai)
+            document.getElementById('res-nama').innerText = studentData.name;
+
+            quizSection.classList.add('hidden');
+            resultSection.classList.remove('hidden');
+
+            // SIMPAN DATA KE FIREBASE (Nilai dan status ujian terkunci untuk mencegah login ulang)
+            const resultId = db.ref('student_results').push().key;
+            db.ref('student_results/' + resultId).set({
+                nama: studentData.name,
+                nis: studentData.nis,
+                score: score,
+                benar: correctCount,
+                total: totalQuestions,
+                waktuSelesai: new Date().toLocaleString()
+            }).catch(error => {
+                console.error("Gagal menyimpan hasil ujian:", error);
+            });
+        }
+
+        // FITUR 1: FUNGSI DASHBOARD ADMIN
+        async function loadAdminDashboard() {
+            const tbody = document.getElementById('admin-results-body');
+            tbody.innerHTML = `<tr><td colspan="6" style="text-align: center;">Memuat data...</td></tr>`;
+
+            try {
+                const snapshot = await db.ref('student_results').once('value');
+                tbody.innerHTML = '';
+                
+                if (snapshot.exists()) {
+                    let index = 1;
+                    snapshot.forEach((childSnap) => {
+                        const data = childSnap.val();
+                        const row = `<tr>
+                            <td>${index++}</td>
+                            <td>${data.nama}</td>
+                            <td>${data.nis}</td>
+                            <td><strong>${data.score}</strong></td>
+                            <td>${data.benar} / ${data.total}</td>
+                            <td>${data.waktuSelesai}</td>
+                        </tr>`;
+                        tbody.innerHTML += row;
+                    });
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center;">Belum ada siswa yang menyelesaikan ujian.</td></tr>`;
+                }
+            } catch (error) {
+                console.error("Gagal mengambil data admin:", error);
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: red;">Gagal memuat data dari server.</td></tr>`;
+            }
+        }
+    </script>
+</body>
+</html>
